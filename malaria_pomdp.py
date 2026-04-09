@@ -1,5 +1,6 @@
 import pomdp_py
 import numpy as np
+from scipy.stats import binom, norm
 
 
 class MalariaState(pomdp_py.State):
@@ -40,23 +41,93 @@ class MalariaTransitionModel(pomdp_py.TransitionModel):
         return MalariaState(pop_copy['health_state'])
 
 
+class MalariaObservation(pomdp_py.Observation):
+    def __init__(self, observed_infected):
+        """observed_infected: {district: number of observed symptomatic cases}"""
+        self.observed_infected = observed_infected
+
+    def __eq__(self, other):
+        return isinstance(other, MalariaObservation) and \
+               self.observed_infected == other.observed_infected
+
+    def __hash__(self):
+        return hash(tuple(sorted(self.observed_infected.items())))
+
+    def __repr__(self):
+        return f"MalariaObservation({self.observed_infected})"
+
+
 class MalariaObservationModel(pomdp_py.ObservationModel):
-    def __init__(self, population_df, n_districts):
+    def __init__(self, population_df, n_districts, p_detect=0.5):
+        """
+        Parameters
+        ----------
+        p_detect : float or dict
+            Detection probability (global or per-district)
+        """
         self.population_df = population_df
         self.districts = n_districts
+        self.p_detect = p_detect
+
+    def _get_p_detect(self, d):
+        """Supports global or per-district detection probability"""
+        if isinstance(self.p_detect, dict):
+            return self.p_detect.get(d, 0.5)
+        return self.p_detect
 
     def probability(self, observation, next_state, action):
-        return 1.0
+        """
+        Computes P(o | s')
+        Assumes:
+            observed_infected[d] ~ Binomial(true_infected[d], p_detect)
+        """
+        prob = 1.0
+
+        for d in range(self.districts):
+            # Get individuals in district d
+            idxs = [
+                i for i in range(len(next_state.individual_states))
+                if self.population_df.at[i, 'district'] == d
+            ]
+
+            states = [next_state.individual_states[i] for i in idxs]
+
+            # Count true infected
+            infected = sum(1 for s in states if s == 'I')
+
+            # Observed count
+            obs_val = observation.observed_infected.get(d, 0)
+
+            p_detect = self._get_p_detect(d)
+
+            # Binomial likelihood
+            prob *= binom.pmf(obs_val, infected, p_detect)
+
+        return prob
 
     def sample(self, next_state, action):
+        """
+        Sample observation from Binomial thinning
+        """
         observed = {}
+
         for d in range(self.districts):
-            states_in_district = [
-                s for i,s in enumerate(next_state.individual_states)
-                if self.population_df.at[i,'district']==d
+            idxs = [
+                i for i in range(len(next_state.individual_states))
+                if self.population_df.at[i, 'district'] == d
             ]
-            infected_count = states_in_district.count('I')
-            observed[d] = np.random.binomial(infected_count, 0.5)
+
+            states = [next_state.individual_states[i] for i in idxs]
+
+            infected = sum(1 for s in states if s == 'I')
+
+            p_detect = self._get_p_detect(d)
+
+            # Sample observed infected
+            observed_count = np.random.binomial(infected, p_detect)
+
+            observed[d] = observed_count
+
         return MalariaObservation(observed)
 
 class MalariaRewardModel(pomdp_py.RewardModel):
