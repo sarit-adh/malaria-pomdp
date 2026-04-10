@@ -26,7 +26,7 @@ class MalariaTransitionModel(pomdp_py.TransitionModel):
         self.population_df = population_df.copy() 
 
     def probability(self, next_state, state, action):
-        return 1.0
+        raise NotImplementedError # not required for sampling-based belief updates
 
     def sample(self, state, action):
         pop_copy = self.population_df.copy()

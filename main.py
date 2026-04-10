@@ -7,7 +7,7 @@ import numpy as np
 
 
 
-time_steps = 5
+time_steps = 20
 districts = 5 
 N = 100
 initial_prevalence = 0.05 
@@ -20,7 +20,7 @@ reward_model = MalariaRewardModel()
 
 total_drugs_per_step = 50
 
-num_particles = 50
+num_particles = 100
 
 
 def update_belief_particles(belief, action, observation,
@@ -63,29 +63,42 @@ def update_belief_particles(belief, action, observation,
 
 
 def run_simulation(policy, population, trans_model, obs_model, reward_model,
-                   time_steps):
+                   time_steps, gamma=0.99):
 
     current_state = MalariaState(population['health_state'])
 
     belief = [current_state for _ in range(num_particles)]
 
     infection_history = []
+    total_reward = 0.0
+    discount = 1.0
 
     for t in range(time_steps):
         print("time step: ", t)
-        action = policy.sample(belief)
+        
+        if isinstance(policy, RandomPolicy):
+            action = policy.sample(None)
+        else:
+            action = policy.sample(belief)
 
         # Environment step
         next_state = trans_model.sample(current_state, action)
         observation = obs_model.sample(next_state, action)
 
+        # --- REWARD ---
+        reward = reward_model.sample(current_state, action, next_state)
+        total_reward += discount * reward
+        discount *= gamma
+
         # Logging
         infected = sum(1 for s in next_state.individual_states if s == 'I')
         infection_history.append(infected)
-        
-        #print("updating belief with action: ", action)
 
-        # Update belief (particle filtering)
+        if isinstance(policy, RandomPolicy):
+            current_state = next_state
+            continue
+        
+        # Belief update
         belief = update_belief_particles(
             belief,
             action,
@@ -93,21 +106,23 @@ def run_simulation(policy, population, trans_model, obs_model, reward_model,
             trans_model,
             obs_model,
             num_particles=num_particles
-            )
+        )
 
         current_state = next_state
 
-    return np.array(infection_history)
+    return np.array(infection_history), total_reward
 
 
-num_simulations = 1
+num_simulations = 10
 
 random_runs = []
 heuristic_runs = []
 
+random_rewards = []
+heuristic_rewards = []
+
 for sim_num in range(num_simulations):
 
-    
     population = initialize_population(
         N=N,
         districts=districts,
@@ -118,23 +133,28 @@ for sim_num in range(num_simulations):
     obs_model = MalariaObservationModel(population, districts)
     reward_model = MalariaRewardModel()
 
-    # Policies
     random_policy = RandomPolicy(total_drugs_per_step, districts)
     heuristic_policy = HeuristicPolicy(total_drugs_per_step, districts, population)
 
-    # Run
     print(f"Running simulation {sim_num+1}/{num_simulations} for random policy...")
-    random_hist = run_simulation(random_policy, population,
-                                trans_model, obs_model, reward_model,
-                                time_steps)
+    random_hist, random_reward = run_simulation(
+        random_policy, population,
+        trans_model, obs_model, reward_model,
+        time_steps
+    )
 
     print(f"Running simulation {sim_num+1}/{num_simulations} for heuristic policy...")
-    heuristic_hist = run_simulation(heuristic_policy, population,
-                                   trans_model, obs_model, reward_model,
-                                   time_steps)
+    heuristic_hist, heuristic_reward = run_simulation(
+        heuristic_policy, population,
+        trans_model, obs_model, reward_model,
+        time_steps
+    )
 
     random_runs.append(random_hist)
     heuristic_runs.append(heuristic_hist)
+
+    random_rewards.append(random_reward)
+    heuristic_rewards.append(heuristic_reward)
 
 
 random_runs = np.array(random_runs)
@@ -146,8 +166,6 @@ std_random = random_runs.std(axis=0)
 mean_heuristic = heuristic_runs.mean(axis=0)
 std_heuristic = heuristic_runs.std(axis=0)
 
-
-import matplotlib.pyplot as plt
 
 t = np.arange(time_steps)
 
@@ -170,6 +188,25 @@ plt.fill_between(t,
 plt.xlabel("Time step")
 plt.ylabel("Number of Infected Individuals")
 plt.title("Random vs Heuristic Drug Allocation")
+plt.legend()
+
+plt.grid(True, linestyle="--", linewidth=0.5)
+plt.show()
+
+
+print("\n=== POLICY COMPARISON (REWARD) ===")
+
+print(f"Random Policy:    mean = {np.mean(random_rewards):.2f}, std = {np.std(random_rewards):.2f}")
+print(f"Heuristic Policy: mean = {np.mean(heuristic_rewards):.2f}, std = {np.std(heuristic_rewards):.2f}")
+
+plt.figure(figsize=(8,5))
+
+plt.hist(random_rewards, alpha=0.5, label="Random Policy")
+plt.hist(heuristic_rewards, alpha=0.5, label="Heuristic Policy")
+
+plt.xlabel("Total Discounted Reward")
+plt.ylabel("Frequency")
+plt.title("Policy Comparison via Reward")
 plt.legend()
 
 plt.grid(True, linestyle="--", linewidth=0.5)
