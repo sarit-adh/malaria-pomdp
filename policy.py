@@ -14,7 +14,7 @@ class RandomPolicy:
         allocation = {d: int(self.total_drugs*count/total_obs) for d,count in observed_infections.items()}
         return MalariaAction(allocation)
     
-    
+# Distributes drugs across districts based on a weighted combination of expected infection burden and uncertainty derived from the belief state    
 class HeuristicPolicy:
     def __init__(self, total_drugs, districts, population_df,
                  alpha=1.0,   # weight on expected infections
